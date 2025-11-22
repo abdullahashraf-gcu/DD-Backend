@@ -16,7 +16,6 @@ const commentRoutes = require('./routes/commentRoutes');
 const chatRoutes = require('./routes/chatRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
 const restaurantRoutes = require('./routes/restaurantRoutes');
-const foodRoutes = require('./routes/foodRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 
 // Connect to database
@@ -42,6 +41,14 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
 // CORS configuration
+app.use(
+  cors({
+    origin:'http://localhost:5173',
+    credentials: true,
+  })
+);
+app.options("*", cors());
+
 
 // Logging
 if (process.env.NODE_ENV === 'development') {
@@ -56,7 +63,6 @@ app.use('/api/comments', commentRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/restaurants', restaurantRoutes);
-app.use('/api/foods', foodRoutes);
 app.use('/api/admin', adminRoutes);
 
 // Health check
