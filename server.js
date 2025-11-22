@@ -42,7 +42,7 @@ app.use(cookieParser());
 
 // CORS configuration
 app.use(cors({
-  origin: "http://localhost:5173",
+  origin: ["https://dd-frontend-pv15.vercel.app","http://localhost:5173"],
   methods: "GET,POST,PUT,DELETE,OPTIONS",
   allowedHeaders: "Content-Type, Authorization",
   credentials: true
