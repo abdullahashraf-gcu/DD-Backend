@@ -7,16 +7,15 @@ const RestaurantReview = require('../models/RestaurantReview');
 const Food = require('../models/Food');
 const FoodReview = require('../models/FoodReview');
 
-// @desc    Basic app analytics
-// @route   GET /api/admin/analytics
-// @access  Private/Admin
+// ---------------- Analytics ---------------- //
+
 exports.getAnalytics = asyncHandler(async (req, res) => {
   const [
     usersCount,
     postsCount,
     commentsCount,
     restaurantsCount,
-    reviewsCount,
+    restaurantReviewsCount,
     foodsCount,
     foodReviewsCount,
     pendingRestaurantsCount,
@@ -37,6 +36,8 @@ exports.getAnalytics = asyncHandler(async (req, res) => {
     FoodReview.countDocuments({ isFlagged: true }),
   ]);
 
+  const reviewsCount = restaurantReviewsCount + foodReviewsCount;
+
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
   const [latestUsers, topRestaurants, topFoods, newUsersWeek, postsWeek] = await Promise.all([
@@ -44,20 +45,17 @@ exports.getAnalytics = asyncHandler(async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(5)
       .select('username fullName createdAt role'),
-    Restaurant.find({
-      isActive: true,
-      $or: [{ approvalStatus: { $exists: false } }, { approvalStatus: 'approved' }],
-    })
+
+    Restaurant.find({ approvalStatus: 'approved', isActive: true })
       .sort({ averageRating: -1, totalReviews: -1 })
       .limit(5)
       .select('name averageRating totalReviews'),
-    Food.find({
-      isActive: true,
-      $or: [{ approvalStatus: { $exists: false } }, { approvalStatus: 'approved' }],
-    })
+
+    Food.find({ approvalStatus: 'approved', isActive: true })
       .sort({ averageRating: -1, totalReviews: -1 })
       .limit(5)
       .select('name averageRating totalReviews'),
+
     User.countDocuments({ createdAt: { $gte: sevenDaysAgo } }),
     Post.countDocuments({ createdAt: { $gte: sevenDaysAgo } }),
   ]);
@@ -85,33 +83,18 @@ exports.getAnalytics = asyncHandler(async (req, res) => {
   });
 });
 
-// @desc    Get all restaurants for admin management
-// @route   GET /api/admin/restaurants
-// @access  Private/Admin
-exports.getAllRestaurants = asyncHandler(async (req, res) => {
-  const {
-    page = 1,
-    limit = 20,
-    status = 'all',
-    search = '',
-  } = req.query;
+// ---------------- Restaurants ---------------- //
 
-  const pageNum = Number(page) || 1;
-  const limitNum = Number(limit) || 20;
+exports.getAllRestaurants = asyncHandler(async (req, res) => {
+  const { page = 1, limit = 20, status = 'all', search = '' } = req.query;
+
+  const pageNum = Number(page);
+  const limitNum = Number(limit);
 
   const conditions = [];
 
   if (status !== 'all') {
-    if (status === 'approved') {
-      conditions.push({
-        $or: [
-          { approvalStatus: 'approved' },
-          { approvalStatus: { $exists: false } },
-        ],
-      });
-    } else {
-      conditions.push({ approvalStatus: status });
-    }
+    conditions.push({ approvalStatus: status });
   }
 
   if (search) {
@@ -133,6 +116,7 @@ exports.getAllRestaurants = asyncHandler(async (req, res) => {
       .sort({ createdAt: -1 })
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum),
+
     Restaurant.countDocuments(query),
   ]);
 
@@ -148,109 +132,98 @@ exports.getAllRestaurants = asyncHandler(async (req, res) => {
   });
 });
 
-// @desc    Get pending restaurant submissions
-// @route   GET /api/admin/restaurants/pending
-// @access  Private/Admin
 exports.getPendingRestaurants = asyncHandler(async (req, res) => {
   const pending = await Restaurant.find({ approvalStatus: 'pending' })
     .populate('submittedBy', 'username fullName email')
     .sort({ createdAt: -1 });
 
-  res.json({
-    success: true,
-    data: pending,
-  });
+  res.json({ success: true, data: pending });
 });
 
-// @desc    Approve restaurant submission
-// @route   PATCH /api/admin/restaurants/:id/approve
-// @access  Private/Admin
 exports.approveRestaurant = asyncHandler(async (req, res) => {
   const restaurant = await Restaurant.findById(req.params.id);
 
   if (!restaurant) {
-    return res.status(404).json({
-      success: false,
-      message: 'Restaurant not found',
-    });
+    return res.status(404).json({ success: false, message: 'Restaurant not found' });
   }
 
-  restaurant.approvalStatus = 'approved';
-  restaurant.approvedBy = req.user._id;
-  restaurant.approvedAt = new Date();
-  restaurant.deniedAt = null;
-  restaurant.denyReason = undefined;
-  restaurant.isActive = true;
+  await Restaurant.updateOne(
+    { _id: restaurant._id },
+    {
+      $set: {
+        approvalStatus: 'approved',
+        approvedBy: req.user._id,
+        approvedAt: new Date(),
+        isActive: true,
+      },
+      $unset: {
+        deniedAt: "",
+        denyReason: "",
+      },
+    }
+  );
 
-  await restaurant.save();
+  const updated = await Restaurant.findById(restaurant._id);
 
   res.json({
     success: true,
     message: 'Restaurant approved successfully',
-    data: restaurant,
+    data: updated,
   });
 });
 
-// @desc    Deny restaurant submission
-// @route   PATCH /api/admin/restaurants/:id/deny
-// @access  Private/Admin
 exports.denyRestaurant = asyncHandler(async (req, res) => {
   const { reason } = req.body;
   const restaurant = await Restaurant.findById(req.params.id);
 
   if (!restaurant) {
-    return res.status(404).json({
-      success: false,
-      message: 'Restaurant not found',
-    });
+    return res.status(404).json({ success: false, message: 'Restaurant not found' });
   }
 
-  restaurant.approvalStatus = 'denied';
-  restaurant.approvedBy = undefined;
-  restaurant.approvedAt = undefined;
-  restaurant.deniedAt = new Date();
-  restaurant.denyReason = reason || 'No reason provided';
-  restaurant.isActive = false;
+  await Restaurant.updateOne(
+    { _id: restaurant._id },
+    {
+      $set: {
+        approvalStatus: 'denied',
+        deniedAt: new Date(),
+        denyReason: reason || 'No reason provided',
+        isActive: false,
+      },
+      $unset: {
+        approvedBy: "",
+        approvedAt: "",
+      },
+    }
+  );
 
-  await restaurant.save();
+  const updated = await Restaurant.findById(restaurant._id);
 
   res.json({
     success: true,
     message: 'Restaurant denied successfully',
-    data: restaurant,
+    data: updated,
   });
 });
 
-// @desc    Get flagged restaurant reviews
-// @route   GET /api/admin/reviews/flagged
-// @access  Private/Admin
+// ---------------- Reviews (Restaurant) ---------------- //
+
 exports.getFlaggedReviews = asyncHandler(async (req, res) => {
   const reviews = await RestaurantReview.find({ isFlagged: true })
     .populate('restaurant', 'name')
     .populate('user', 'username fullName');
 
-  res.json({
-    success: true,
-    data: reviews,
-  });
+  res.json({ success: true, data: reviews });
 });
 
-// @desc    Resolve flagged restaurant review
-// @route   PATCH /api/admin/reviews/:id/resolve
-// @access  Private/Admin
 exports.resolveFlaggedReview = asyncHandler(async (req, res) => {
   const review = await RestaurantReview.findById(req.params.id);
 
   if (!review) {
-    return res.status(404).json({
-      success: false,
-      message: 'Review not found',
-    });
+    return res.status(404).json({ success: false, message: 'Review not found' });
   }
 
   review.isFlagged = false;
   review.flags = [];
-  review.isVerified = true;
 
   await review.save();
 
@@ -261,40 +234,43 @@ exports.resolveFlaggedReview = asyncHandler(async (req, res) => {
   });
 });
 
-// @desc    Delete a flagged review
-// @route   DELETE /api/admin/reviews/:id
-// @access  Private/Admin
 exports.deleteFlaggedReview = asyncHandler(async (req, res) => {
   const review = await RestaurantReview.findById(req.params.id);
 
   if (!review) {
-    return res.status(404).json({
-      success: false,
-      message: 'Review not found',
-    });
+    return res.status(404).json({ success: false, message: 'Review not found' });
   }
+
+  const restaurantId = review.restaurant;
 
   await review.deleteOne();
 
-  res.json({
-    success: true,
-    message: 'Review removed successfully',
-  });
+  // Recalculate restaurant rating
+  const reviews = await RestaurantReview.find({ restaurant: restaurantId });
+  const totalReviews = reviews.length;
+  const averageRating = totalReviews
+    ? reviews.reduce((s, r) => s + r.rating, 0) / totalReviews
+    : 0;
+
+  await Restaurant.updateOne(
+    { _id: restaurantId },
+    { totalReviews, averageRating }
+  );
+
+  res.json({ success: true, message: 'Review removed successfully' });
 });
 
-// @desc    Get all posts for moderation
-// @route   GET /api/admin/posts
-// @access  Private/Admin
+// ---------------- Posts ---------------- //
+
 exports.getAllPosts = asyncHandler(async (req, res) => {
   const { page = 1, limit = 20, search = '' } = req.query;
-  const pageNum = Number(page) || 1;
-  const limitNum = Number(limit) || 20;
 
-  const query = {};
+  const pageNum = Number(page);
+  const limitNum = Number(limit);
 
-  if (search) {
-    query.content = { $regex: search, $options: 'i' };
-  }
+  const query = search
+    ? { content: { $regex: search, $options: 'i' } }
+    : {};
 
   const [posts, total] = await Promise.all([
     Post.find(query)
@@ -317,45 +293,31 @@ exports.getAllPosts = asyncHandler(async (req, res) => {
   });
 });
 
-// @desc    Delete any user post
-// @route   DELETE /api/admin/posts/:id
-// @access  Private/Admin
 exports.deleteUserPost = asyncHandler(async (req, res) => {
   const post = await Post.findById(req.params.id);
 
   if (!post) {
-    return res.status(404).json({
-      success: false,
-      message: 'Post not found',
-    });
+    return res.status(404).json({ success: false, message: 'Post not found' });
   }
 
   await Comment.deleteMany({ post: post._id });
   await post.deleteOne();
 
-  res.json({
-    success: true,
-    message: 'Post deleted successfully',
-  });
+  res.json({ success: true, message: 'Post deleted successfully' });
 });
 
-// -------- Food management --------
+// ---------------- Foods ---------------- //
 
 exports.getAllFoods = asyncHandler(async (req, res) => {
   const { page = 1, limit = 20, status = 'all', search = '' } = req.query;
-  const pageNum = Number(page) || 1;
-  const limitNum = Number(limit) || 20;
+
+  const pageNum = Number(page);
+  const limitNum = Number(limit);
 
   const conditions = [];
 
   if (status !== 'all') {
-    if (status === 'approved') {
-      conditions.push({
-        $or: [{ approvalStatus: 'approved' }, { approvalStatus: { $exists: false } }],
-      });
-    } else {
-      conditions.push({ approvalStatus: status });
-    }
+    conditions.push({ approvalStatus: status });
   }
 
   if (search) {
@@ -377,6 +339,7 @@ exports.getAllFoods = asyncHandler(async (req, res) => {
       .sort({ createdAt: -1 })
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum),
+
     Food.countDocuments(query),
   ]);
 
@@ -397,35 +360,38 @@ exports.getPendingFoods = asyncHandler(async (req, res) => {
     .populate('submittedBy', 'username fullName email')
     .sort({ createdAt: -1 });
 
-  res.json({
-    success: true,
-    data: pending,
-  });
+  res.json({ success: true, data: pending });
 });
 
 exports.approveFood = asyncHandler(async (req, res) => {
   const food = await Food.findById(req.params.id);
 
   if (!food) {
-    return res.status(404).json({
-      success: false,
-      message: 'Food not found',
-    });
+    return res.status(404).json({ success: false, message: 'Food not found' });
   }
 
-  food.approvalStatus = 'approved';
-  food.approvedBy = req.user._id;
-  food.approvedAt = new Date();
-  food.deniedAt = null;
-  food.denyReason = undefined;
-  food.isActive = true;
+  await Food.updateOne(
+    { _id: food._id },
+    {
+      $set: {
+        approvalStatus: 'approved',
+        approvedBy: req.user._id,
+        approvedAt: new Date(),
+        isActive: true,
+      },
+      $unset: {
+        deniedAt: "",
+        denyReason: "",
+      },
+    }
+  );
 
-  await food.save();
+  const updated = await Food.findById(food._id);
 
   res.json({
     success: true,
     message: 'Food approved successfully',
-    data: food,
+    data: updated,
   });
 });
 
@@ -434,25 +400,31 @@ exports.denyFood = asyncHandler(async (req, res) => {
   const food = await Food.findById(req.params.id);
 
   if (!food) {
-    return res.status(404).json({
-      success: false,
-      message: 'Food not found',
-    });
+    return res.status(404).json({ success: false, message: 'Food not found' });
   }
 
-  food.approvalStatus = 'denied';
-  food.approvedBy = undefined;
-  food.approvedAt = undefined;
-  food.deniedAt = new Date();
-  food.denyReason = reason || 'No reason provided';
-  food.isActive = false;
+  await Food.updateOne(
+    { _id: food._id },
+    {
+      $set: {
+        approvalStatus: 'denied',
+        deniedAt: new Date(),
+        denyReason: reason || 'No reason provided',
+        isActive: false,
+      },
+      $unset: {
+        approvedBy: "",
+        approvedAt: "",
+      },
+    }
+  );
 
-  await food.save();
+  const updated = await Food.findById(food._id);
 
   res.json({
     success: true,
     message: 'Food denied successfully',
-    data: food,
+    data: updated,
   });
 });
 
@@ -461,25 +433,18 @@ exports.getFlaggedFoodReviews = asyncHandler(async (req, res) => {
     .populate('food', 'name')
     .populate('user', 'username fullName');
 
-  res.json({
-    success: true,
-    data: reviews,
-  });
+  res.json({ success: true, data: reviews });
 });
 
 exports.resolveFlaggedFoodReview = asyncHandler(async (req, res) => {
   const review = await FoodReview.findById(req.params.id);
 
   if (!review) {
-    return res.status(404).json({
-      success: false,
-      message: 'Review not found',
-    });
+    return res.status(404).json({ success: false, message: 'Review not found' });
   }
 
   review.isFlagged = false;
   review.flags = [];
-  review.isVerified = true;
 
   await review.save();
 
@@ -494,16 +459,24 @@ exports.deleteFlaggedFoodReview = asyncHandler(async (req, res) => {
   const review = await FoodReview.findById(req.params.id);
 
   if (!review) {
-    return res.status(404).json({
-      success: false,
-      message: 'Review not found',
-    });
+    return res.status(404).json({ success: false, message: 'Food review not found' });
   }
+
+  const foodId = review.food;
 
   await review.deleteOne();
 
-  res.json({
-    success: true,
-    message: 'Food review removed successfully',
-  });
+  // Recalculate food rating
+  const reviews = await FoodReview.find({ food: foodId });
+  const totalReviews = reviews.length;
+  const averageRating = totalReviews
+    ? reviews.reduce((s, r) => s + r.rating, 0) / totalReviews
+    : 0;
+
+  await Food.updateOne(
+    { _id: foodId },
+    { totalReviews, averageRating }
+  );
+
+  res.json({ success: true, message: 'Food review removed successfully' });
 });
